@@ -1,0 +1,286 @@
+/**
+ * Config Manager
+ *
+ * Main orchestrator for the unified configuration management system
+ */
+
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import YAML from "yaml";
+import { getStrategy } from "../strategies/index.js";
+import { ActiveModuleFilter } from "./ActiveModuleFilter.js";
+import { FragmentDiscovery } from "./FragmentDiscovery.js";
+import { HeaderGenerator } from "./HeaderGenerator.js";
+import { OverrideDiscovery } from "./OverrideDiscovery.js";
+import { SymlinkManager } from "./SymlinkManager.js";
+import { TemplateDiscovery } from "./TemplateDiscovery.js";
+import type {
+  ConfigManagerOptions,
+  Fragment,
+  MergeContext,
+  Source,
+} from "./types.js";
+
+export class ConfigManager {
+  private templateDiscovery: TemplateDiscovery;
+  private fragmentDiscovery: FragmentDiscovery;
+  private overrideDiscovery: OverrideDiscovery;
+  private moduleFilter: ActiveModuleFilter;
+  private symlinkManager: SymlinkManager;
+  private headerGenerator: HeaderGenerator;
+
+  constructor(private options: ConfigManagerOptions) {
+    const { projectRoot } = options;
+    this.templateDiscovery = new TemplateDiscovery(projectRoot);
+    this.fragmentDiscovery = new FragmentDiscovery(projectRoot);
+    this.overrideDiscovery = new OverrideDiscovery(projectRoot);
+    this.moduleFilter = new ActiveModuleFilter(projectRoot);
+    this.symlinkManager = new SymlinkManager();
+    this.headerGenerator = new HeaderGenerator(projectRoot);
+  }
+
+  /**
+   * Apply configuration from templates, fragments, and overrides
+   */
+  async apply(): Promise<void> {
+    const { verbose } = this.options;
+
+    console.log("🔍 Discovering configuration sources...\n");
+
+    // 1. Discovery phase
+    const templates = await this.templateDiscovery.discoverTemplates();
+    const allFragments = await this.fragmentDiscovery.discoverFragments();
+    const overrides = await this.overrideDiscovery.discoverOverrides();
+
+    if (verbose) {
+      console.log(`  Found ${templates.length} templates`);
+      console.log(
+        `  Found ${allFragments.length} fragments (before filtering)`,
+      );
+      console.log(`  Found ${overrides.length} overrides\n`);
+    }
+
+    // 2. Filter fragments by active modules and conditions
+    const activeModules = this.moduleFilter.getActiveModules();
+    const fragments =
+      this.moduleFilter.filterFragmentsWithConditions(allFragments);
+
+    if (verbose) {
+      console.log(`  Active modules: ${activeModules.join(", ")}`);
+      console.log(`  Fragments after filtering: ${fragments.length}\n`);
+    }
+
+    // 3. Group sources by target path
+    const targetGroups = this.groupByTarget(templates, fragments, overrides);
+
+    console.log(`📋 Processing ${targetGroups.size} configuration files...\n`);
+
+    // 4. Process each target file
+    for (const [targetPath, sources] of targetGroups) {
+      await this.processTarget(targetPath, sources, activeModules);
+    }
+
+    console.log("\n✅ Configuration applied successfully!");
+  }
+
+  /**
+   * Group all sources by their target path
+   */
+  private groupByTarget(
+    templates: Source[],
+    fragments: Fragment[],
+    overrides: Source[],
+  ): Map<string, Source[]> {
+    const groups = new Map<string, Source[]>();
+
+    // Add templates
+    for (const template of templates) {
+      const targetPath = this.templateDiscovery.getTargetPath(template.path);
+      if (!groups.has(targetPath)) {
+        groups.set(targetPath, []);
+      }
+      groups.get(targetPath)?.push(template);
+    }
+
+    // Add fragments
+    for (const fragment of fragments) {
+      const targets = Array.isArray(fragment.metadata._targetPath)
+        ? fragment.metadata._targetPath
+        : [fragment.metadata._targetPath];
+
+      for (const target of targets) {
+        const targetPath = path.join(this.options.projectRoot, target);
+
+        if (!groups.has(targetPath)) {
+          groups.set(targetPath, []);
+        }
+
+        const source: Source = {
+          type: "fragment",
+          path: fragment.path,
+          content: fragment.content,
+          metadata: fragment.metadata,
+          priority: fragment.metadata._priority || 100,
+        };
+
+        groups.get(targetPath)?.push(source);
+      }
+    }
+
+    // Add overrides
+    for (const override of overrides) {
+      const targetPath = this.overrideDiscovery.getTargetPath(override.path);
+      if (!groups.has(targetPath)) {
+        groups.set(targetPath, []);
+      }
+      groups.get(targetPath)?.push(override);
+    }
+
+    // Sort sources by priority within each group
+    for (const [_targetPath, sources] of groups) {
+      sources.sort((a, b) => a.priority - b.priority);
+    }
+
+    return groups;
+  }
+
+  /**
+   * Process a single target file
+   */
+  private async processTarget(
+    targetPath: string,
+    sources: Source[],
+    activeModules: string[],
+  ): Promise<void> {
+    const { verbose, dryRun } = this.options;
+    const relativePath = path.relative(this.options.projectRoot, targetPath);
+
+    if (sources.length === 0) {
+      // No sources - remove target if it exists
+      if (!dryRun) {
+        await this.symlinkManager.remove(targetPath);
+      }
+      return;
+    }
+
+    if (sources.length === 1) {
+      // Single source - symlink or copy
+      const source = sources[0];
+      const shouldCopy = source.metadata?._copy || false;
+
+      if (verbose) {
+        console.log(
+          `${shouldCopy ? "📄" : "🔗"} ${relativePath} (${shouldCopy ? "copy" : "symlink"} from ${path.relative(this.options.projectRoot, source.path)})`,
+        );
+      }
+
+      if (!dryRun) {
+        if (shouldCopy) {
+          await this.symlinkManager.copyFile(source.path, targetPath);
+        } else {
+          await this.symlinkManager.createSymlink(source.path, targetPath);
+        }
+      }
+    } else {
+      // Multiple sources - merge and generate
+      if (verbose) {
+        console.log(`🤖 ${relativePath} (merging ${sources.length} sources)`);
+      }
+
+      if (!dryRun) {
+        await this.mergeAndWrite(targetPath, sources, activeModules);
+      }
+    }
+  }
+
+  /**
+   * Merge multiple sources and write the result
+   */
+  private async mergeAndWrite(
+    targetPath: string,
+    sources: Source[],
+    activeModules: string[],
+  ): Promise<void> {
+    const ext = path.extname(targetPath).toLowerCase();
+
+    // Get merge strategy (from first source with strategy, or auto-detect)
+    const explicitStrategy = sources.find((s) => s.metadata?._mergeStrategy)
+      ?.metadata?._mergeStrategy;
+    const strategy = getStrategy(explicitStrategy, targetPath);
+
+    // Create merge context
+    const context: MergeContext = {
+      targetPath,
+      relativePath: path.relative(this.options.projectRoot, targetPath),
+      sourcePaths: sources.map((s) => s.path),
+      activeModules,
+    };
+
+    // Merge all sources
+    const contents = sources.map((s) => s.content);
+    const merged = strategy.merge(contents, context);
+
+    // Post-process if strategy supports it
+    const final = strategy.postProcess
+      ? strategy.postProcess(merged, context)
+      : merged;
+
+    // Generate header
+    const header = this.headerGenerator.generate(
+      targetPath,
+      sources.map((s) => s.path),
+    );
+
+    // Remove existing symlink if present (otherwise writes will follow the symlink)
+    try {
+      const stats = await fs.lstat(targetPath);
+      if (stats.isSymbolicLink()) {
+        await fs.unlink(targetPath);
+      }
+    } catch (error: unknown) {
+      // File doesn't exist - that's fine
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
+
+    // Write file
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+
+    if ([".json", ".jsonc", ".json5"].includes(ext)) {
+      // For JSON, parse header and merge with content
+      const headerObj = JSON.parse(header);
+      const combined = {
+        ...(typeof headerObj === "object" && headerObj !== null
+          ? headerObj
+          : {}),
+        ...(typeof final === "object" && final !== null ? final : {}),
+      };
+      await fs.writeFile(targetPath, `${JSON.stringify(combined, null, 2)}\n`);
+    } else if ([".yaml", ".yml"].includes(ext)) {
+      // For YAML, prepend header comments
+      const yamlOptions = {
+        indent: 2,
+        lineWidth: 0, // Disable automatic line wrapping
+        sortKeys: false,
+      };
+      const yamlContent = YAML.stringify(final, yamlOptions);
+      await fs.writeFile(targetPath, header + yamlContent);
+    } else if ([".ts", ".js", ".mjs", ".cjs"].includes(ext)) {
+      // For JS/TS, prepend JSDoc header
+      const content =
+        typeof final === "string" ? final : JSON.stringify(final, null, 2);
+      await fs.writeFile(targetPath, `${header}\n${content}`);
+    } else {
+      // For text files, prepend hash header
+      const content =
+        typeof final === "string" ? final : JSON.stringify(final, null, 2);
+      await fs.writeFile(targetPath, header + content);
+    }
+  }
+}
