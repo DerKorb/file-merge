@@ -42,10 +42,10 @@ export class TemplateDiscovery {
 
     for (const templatePath of templatePaths) {
       try {
-        const content = await this.loadFile(templatePath);
         const _relativePath = path.relative(templatesDir, templatePath);
         
-        // Resolve template variables in the relative path (filename)
+        // Resolve template variables in the relative path (filename) FIRST
+        // This allows us to skip templates early if variables aren't available
         let resolvedRelativePath: string;
         try {
           resolvedRelativePath = TemplateVariableResolver.resolve(_relativePath);
@@ -54,6 +54,9 @@ export class TemplateDiscovery {
           console.warn(`⚠️  Skipping template ${templatePath}: template variables not resolved (${error instanceof Error ? error.message : String(error)})`);
           continue;
         }
+
+        // Only load content if filename resolution succeeded
+        const content = await this.loadFile(templatePath);
 
         templates.push({
           type: "template",
