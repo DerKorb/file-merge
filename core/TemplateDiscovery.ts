@@ -50,8 +50,9 @@ export class TemplateDiscovery {
         try {
           resolvedRelativePath = TemplateVariableResolver.resolve(_relativePath);
         } catch (error) {
-          console.error(`❌ Failed to resolve template variables in ${templatePath}:`, error);
-          throw error;
+          // If variables can't be resolved, skip this template (override file can still provide values)
+          console.warn(`⚠️  Skipping template ${templatePath}: template variables not resolved (${error instanceof Error ? error.message : String(error)})`);
+          continue;
         }
 
         templates.push({
