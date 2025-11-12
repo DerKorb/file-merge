@@ -66,12 +66,32 @@ file-merge status [file]
 - **Fragment merging** - Merge fragments from packages/modules
 - **Override support** - Override templates with project-specific changes
 - **Smart merge strategies** - Auto-detects merge strategy based on file type
-- **Supported formats**: YAML, JSON, GitLab CI, Docker Compose, TypeScript configs, VS Code tasks, text files (.gitignore, .dockerignore), and more
+- **Template variables** - Use `{{VARIABLE}}` syntax in filenames and paths (resolved from environment variables)
+- **Supported formats**: YAML, JSON, TOML, GitLab CI, Docker Compose, TypeScript configs, VS Code tasks, text files (.gitignore, .dockerignore), and more
+
+## Template Variables
+
+File-merge supports template variables using `{{VARIABLE}}` syntax:
+
+- **In template filenames**: `atom-framework/config-templates/__{{ENV}}.yaml` → resolves to `{{ENV}}.yaml` in project root
+- **In fragment `_targetPath`**: `_targetPath: "config/{{ENV}}.json"` → resolves to the target path
+
+Variables are resolved from environment variables. If a required variable is missing, the tool will fail with a clear error message.
+
+**Example:**
+```yaml
+# Fragment file: packages/my-package/config.fragment.yaml
+_targetPath: "config/{{ENV}}/settings.json"
+# ... rest of fragment content
+```
+
+If `ENV=production`, this fragment will target `config/production/settings.json`.
 
 ## Merge Strategies
 
 - `deep-merge` - Deep merge for JSON objects
 - `yaml-merge` - Deep merge for YAML files
+- `toml-merge` - Deep merge for TOML files
 - `gitlab-ci` - GitLab CI/CD configuration merging
 - `docker-compose` - Docker Compose file merging
 - `tsconfig` - TypeScript config merging

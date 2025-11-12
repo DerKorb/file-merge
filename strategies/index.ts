@@ -129,6 +129,22 @@ export class YamlMergeStrategy implements MergeStrategy {
 }
 
 /**
+ * TOML merge strategy - deep merge for TOML files
+ */
+export class TomlMergeStrategy implements MergeStrategy {
+  name = 'toml-merge';
+  private deepMerge = new DeepMergeStrategy();
+
+  validate(content: any): ValidationResult {
+    return this.deepMerge.validate(content);
+  }
+
+  merge(sources: any[], context: MergeContext): any {
+    return this.deepMerge.merge(sources, context);
+  }
+}
+
+/**
  * Docker Compose merge strategy
  * Merges services, volumes, networks
  */
@@ -519,6 +535,7 @@ export class GitLabCIMergeStrategy implements MergeStrategy {
 export const strategies: Record<string, MergeStrategy> = {
   'deep-merge': new DeepMergeStrategy(),
   'yaml-merge': new YamlMergeStrategy(),
+  'toml-merge': new TomlMergeStrategy(),
   'append-lines': new AppendLinesStrategy(),
   'replace': new ReplaceStrategy(),
   'docker-compose': new DockerComposeMergeStrategy(),
@@ -548,6 +565,8 @@ export function getStrategy(strategyName: string | undefined, filePath: string):
     return strategies['append-lines'];
   } else if (fileName.endsWith('.editorconfig')) {
     return strategies['replace'];
+  } else if (fileName.endsWith('.toml')) {
+    return strategies['toml-merge'];
   } else if (fileName.endsWith('.yaml') || fileName.endsWith('.yml')) {
     return strategies['yaml-merge'];
   } else if (fileName.endsWith('.json')) {

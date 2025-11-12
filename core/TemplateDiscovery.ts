@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { glob } from "glob";
 import type { ConfigContent, Source } from "./types.js";
+import { TemplateVariableResolver } from "./TemplateVariableResolver.js";
 
 export class TemplateDiscovery {
   constructor(private projectRoot: string) {}
@@ -43,12 +44,22 @@ export class TemplateDiscovery {
       try {
         const content = await this.loadFile(templatePath);
         const _relativePath = path.relative(templatesDir, templatePath);
+        
+        // Resolve template variables in the relative path (filename)
+        let resolvedRelativePath: string;
+        try {
+          resolvedRelativePath = TemplateVariableResolver.resolve(_relativePath);
+        } catch (error) {
+          console.error(`❌ Failed to resolve template variables in ${templatePath}:`, error);
+          throw error;
+        }
 
         templates.push({
           type: "template",
           path: templatePath,
           content,
           priority: 0, // Templates have lowest priority
+          resolvedRelativePath, // Store resolved path for target path calculation
         });
       } catch (error) {
         console.error(`❌ Failed to load template ${templatePath}:`, error);
@@ -61,18 +72,33 @@ export class TemplateDiscovery {
   /**
    * Get target path for a template file
    * Removes __ prefix and maps to project root
+   * Resolves template variables in the path
    */
-  getTargetPath(templatePath: string): string {
+  getTargetPath(templatePath: string, resolvedRelativePath?: string): string {
     const templatesDir = path.join(
       this.projectRoot,
       "atom-framework/config-templates",
     );
 
-    const relativePath = path.relative(templatesDir, templatePath);
+    let relativePath: string;
+    if (resolvedRelativePath) {
+      // Use already resolved path
+      relativePath = resolvedRelativePath;
+    } else {
+      // Resolve variables in relative path
+      const rawRelativePath = path.relative(templatesDir, templatePath);
+      relativePath = TemplateVariableResolver.resolve(rawRelativePath);
+    }
+    
     // Remove __ prefix from filename
+    // Handle cases like: __{{ENV}}.yaml -> {{ENV}}.yaml (after resolution)
+    // or: __file-{{NAME}}.yaml -> file-{{NAME}}.yaml (after resolution)
     const targetRelative = relativePath.replace(/__([^/]+)$/, "$1");
 
-    return path.join(this.projectRoot, targetRelative);
+    // Resolve any remaining variables in the target path (in case variables are in directory parts)
+    const fullyResolved = TemplateVariableResolver.resolve(targetRelative);
+
+    return path.join(this.projectRoot, fullyResolved);
   }
 
   /**
@@ -80,7 +106,18 @@ export class TemplateDiscovery {
    */
   private async loadFile(filePath: string): Promise<ConfigContent> {
     const ext = path.extname(filePath).toLowerCase();
-    const content = await fs.readFile(filePath, "utf-8");
+    let content = await fs.readFile(filePath, "utf-8");
+
+    // Resolve template variables in content
+    if (TemplateVariableResolver.hasVariables(content)) {
+      try {
+        content = TemplateVariableResolver.resolve(content);
+      } catch (error) {
+        // If variables can't be resolved, log warning but continue
+        // This allows templates to be loaded even if some variables aren't set yet
+        console.warn(`⚠️  Warning: Could not resolve template variables in ${filePath}: ${error}`);
+      }
+    }
 
     if ([".json", ".jsonc", ".json5"].includes(ext)) {
       // For JSON, parse it
@@ -96,6 +133,10 @@ export class TemplateDiscovery {
       // For YAML, we'll parse it using the yaml library
       const YAML = await import("yaml");
       return YAML.parse(content);
+    } else if (ext === ".toml") {
+      // For TOML, parse it using @iarna/toml
+      const TOML = await import("@iarna/toml");
+      return TOML.parse(content) as ConfigContent;
     } else {
       // For other files, return as text
       return content;

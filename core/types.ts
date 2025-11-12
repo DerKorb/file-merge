@@ -64,6 +64,8 @@ export interface Source {
   metadata?: FragmentMetadata;
   /** Priority for merging */
   priority: number;
+  /** Resolved relative path (with template variables resolved) */
+  resolvedRelativePath?: string;
 }
 
 export interface MergeStrategy<T = ConfigContent> {

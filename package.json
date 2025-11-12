@@ -27,6 +27,7 @@
     "gitlab-ci",
     "docker-compose",
     "tsconfig",
+    "toml",
     "configuration"
   ],
   "author": "",
@@ -42,6 +43,7 @@
     "glob": "^10.3.10",
     "minimatch": "^9.0.3",
     "yaml": "^2.3.4",
+    "@iarna/toml": "^2.2.5",
     "chokidar": "^3.5.3",
     "commander": "^11.1.0"
   },

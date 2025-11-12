@@ -78,6 +78,13 @@ export class OverrideDiscovery {
     } else if ([".yaml", ".yml"].includes(ext)) {
       const YAML = await import("yaml");
       return YAML.parse(content);
+    } else if (ext === ".toml") {
+      const TOML = await import("@iarna/toml");
+      try {
+        return TOML.parse(content) as ConfigContent;
+      } catch {
+        return content;
+      }
     } else {
       return content;
     }

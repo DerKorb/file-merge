@@ -288,6 +288,9 @@ export class Migrator {
     } else if ([".yaml", ".yml"].includes(ext)) {
       const YAML = await import("yaml");
       await fs.writeFile(filePath, YAML.stringify(content));
+    } else if (ext === ".toml") {
+      const TOML = await import("@iarna/toml");
+      await fs.writeFile(filePath, TOML.stringify(content as any));
     } else {
       const text =
         typeof content === "string"

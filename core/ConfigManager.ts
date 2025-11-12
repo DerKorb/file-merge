@@ -95,7 +95,10 @@ export class ConfigManager {
 
     // Add templates
     for (const template of templates) {
-      const targetPath = this.templateDiscovery.getTargetPath(template.path);
+      const targetPath = this.templateDiscovery.getTargetPath(
+        template.path,
+        template.resolvedRelativePath
+      );
       if (!groups.has(targetPath)) {
         groups.set(targetPath, []);
       }
@@ -271,6 +274,12 @@ export class ConfigManager {
       };
       const yamlContent = YAML.stringify(final, yamlOptions);
       await fs.writeFile(targetPath, header + yamlContent);
+    } else if (ext === ".toml") {
+      // For TOML, prepend header comments and stringify
+      const TOML = await import("@iarna/toml");
+      // TOML.stringify expects JsonMap, cast final appropriately
+      const tomlContent = TOML.stringify(final as any);
+      await fs.writeFile(targetPath, header + tomlContent);
     } else if ([".ts", ".js", ".mjs", ".cjs"].includes(ext)) {
       // For JS/TS, prepend JSDoc header
       const content =

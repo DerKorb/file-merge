@@ -24,6 +24,8 @@ export class HeaderGenerator {
       return this.generateJsonHeader(relSources);
     } else if ([".yaml", ".yml"].includes(ext)) {
       return this.generateYamlHeader(relSources);
+    } else if (ext === ".toml") {
+      return this.generateYamlHeader(relSources); // TOML uses # comments like YAML
     } else if ([".ts", ".js", ".mjs", ".cjs"].includes(ext)) {
       return this.generateJsDocHeader(relSources);
     } else {

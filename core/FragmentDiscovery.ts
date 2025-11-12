@@ -13,6 +13,7 @@ import type {
   FragmentMetadata,
   JsonValue,
 } from "./types.js";
+import { TemplateVariableResolver } from "./TemplateVariableResolver.js";
 
 export class FragmentDiscovery {
   constructor(private projectRoot: string) {}
@@ -85,6 +86,14 @@ export class FragmentDiscovery {
         console.error(`❌ Invalid YAML in ${filePath}:`, error);
         return null;
       }
+    } else if (ext === ".toml") {
+      const TOML = await import("@iarna/toml");
+      try {
+        parsed = TOML.parse(content) as JsonValue;
+      } catch (error) {
+        console.error(`❌ Invalid TOML in ${filePath}:`, error);
+        return null;
+      }
     } else if (ext === ".txt") {
       // For .txt files, extract metadata from special comments
       const metadata = this.extractTextMetadata(content);
@@ -92,6 +101,21 @@ export class FragmentDiscovery {
         console.error(`❌ Fragment ${filePath} missing _targetPath`);
         return null;
       }
+      
+      // Resolve template variables in _targetPath
+      try {
+        if (typeof metadata._targetPath === "string") {
+          metadata._targetPath = TemplateVariableResolver.resolve(metadata._targetPath);
+        } else if (Array.isArray(metadata._targetPath)) {
+          metadata._targetPath = metadata._targetPath.map(path => 
+            TemplateVariableResolver.resolve(path)
+          );
+        }
+      } catch (error) {
+        console.error(`❌ Failed to resolve template variables in _targetPath for ${filePath}:`, error);
+        throw error;
+      }
+      
       return {
         path: filePath,
         content: this.stripMetadata(content),
@@ -114,6 +138,20 @@ export class FragmentDiscovery {
     if (!metadata._targetPath) {
       console.error(`❌ Fragment ${filePath} missing _targetPath`);
       return null;
+    }
+
+    // Resolve template variables in _targetPath
+    try {
+      if (typeof metadata._targetPath === "string") {
+        metadata._targetPath = TemplateVariableResolver.resolve(metadata._targetPath);
+      } else if (Array.isArray(metadata._targetPath)) {
+        metadata._targetPath = metadata._targetPath.map(path => 
+          TemplateVariableResolver.resolve(path)
+        );
+      }
+    } catch (error) {
+      console.error(`❌ Failed to resolve template variables in _targetPath for ${filePath}:`, error);
+      throw error;
     }
 
     // Remove metadata properties from content
