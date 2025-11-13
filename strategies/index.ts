@@ -8,7 +8,7 @@ import type { MergeStrategy, MergeContext, ValidationResult } from '../core/type
 
 /**
  * Generic deep merge strategy for JSON objects
- * Recursively merges objects, arrays are replaced
+ * Recursively merges objects and arrays (concatenates arrays, deduplicates)
  */
 export class DeepMergeStrategy implements MergeStrategy {
   name = 'deep-merge';
@@ -36,19 +36,36 @@ export class DeepMergeStrategy implements MergeStrategy {
   private deepMerge(target: any, source: any): void {
     for (const key in source) {
       if (source[key] === null) {
-        // null deletes the key
+        // null deletes the key, but only if it doesn't already exist with content
+        if (key in target && target[key] !== null && target[key] !== undefined) {
+          throw new Error(
+            `Cannot delete key "${key}" with null: key already exists with value. ` +
+            `If you want to delete a key, ensure it doesn't exist in earlier sources. ` +
+            `Current value: ${JSON.stringify(target[key])}`
+          );
+        }
         delete target[key];
         continue;
       }
 
-      if (typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      if (Array.isArray(source[key])) {
+        // Merge arrays (concatenate and deduplicate)
+        if (!target[key] || !Array.isArray(target[key])) {
+          target[key] = [];
+        }
+        for (const item of source[key]) {
+          if (!target[key].includes(item)) {
+            target[key].push(item);
+          }
+        }
+      } else if (typeof source[key] === 'object' && source[key] !== null) {
         // Recursive object merge
-        if (!target[key] || typeof target[key] !== 'object') {
+        if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
           target[key] = {};
         }
         this.deepMerge(target[key], source[key]);
       } else {
-        // Direct assignment (arrays and primitives replace)
+        // Direct assignment (primitives replace)
         target[key] = source[key];
       }
     }
@@ -530,6 +547,70 @@ export class GitLabCIMergeStrategy implements MergeStrategy {
 }
 
 /**
+ * PNPM Workspace merge strategy
+ * Merges packages arrays (concatenates and deduplicates)
+ * Deep merges catalogs object
+ */
+export class PnpmWorkspaceMergeStrategy implements MergeStrategy {
+  name = 'pnpm-workspace';
+
+  validate(content: any): ValidationResult {
+    if (typeof content !== 'object' || content === null) {
+      return {
+        valid: false,
+        errors: ['Content must be an object'],
+      };
+    }
+    return { valid: true };
+  }
+
+  merge(sources: any[], context: MergeContext): any {
+    const result: any = {
+      packages: [],
+      catalogs: {},
+    };
+
+    for (const source of sources) {
+      // Merge packages array (concatenate and deduplicate)
+      if (source.packages && Array.isArray(source.packages)) {
+        for (const pkg of source.packages) {
+          if (!result.packages.includes(pkg)) {
+            result.packages.push(pkg);
+          }
+        }
+      }
+
+      // Deep merge catalogs object
+      if (source.catalogs) {
+        this.deepMerge(result.catalogs, source.catalogs);
+      }
+
+      // Copy other properties (last one wins)
+      for (const key of Object.keys(source)) {
+        if (key !== 'packages' && key !== 'catalogs') {
+          result[key] = source[key];
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private deepMerge(target: any, source: any): void {
+    for (const key in source) {
+      if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key])) {
+        if (!target[key] || typeof target[key] !== 'object') {
+          target[key] = {};
+        }
+        this.deepMerge(target[key], source[key]);
+      } else {
+        target[key] = source[key];
+      }
+    }
+  }
+}
+
+/**
  * Strategy registry
  */
 export const strategies: Record<string, MergeStrategy> = {
@@ -542,6 +623,7 @@ export const strategies: Record<string, MergeStrategy> = {
   'tsconfig': new TsConfigMergeStrategy(),
   'vscode-tasks': new VSCodeTasksMergeStrategy(),
   'gitlab-ci': new GitLabCIMergeStrategy(),
+  'pnpm-workspace': new PnpmWorkspaceMergeStrategy(),
 };
 
 /**
@@ -567,6 +649,8 @@ export function getStrategy(strategyName: string | undefined, filePath: string):
     return strategies['replace'];
   } else if (fileName.endsWith('.toml')) {
     return strategies['toml-merge'];
+  } else if (fileName === 'pnpm-workspace.yaml' || fileName === 'pnpm-workspace.yml') {
+    return strategies['pnpm-workspace'];
   } else if (fileName.endsWith('.yaml') || fileName.endsWith('.yml')) {
     return strategies['yaml-merge'];
   } else if (fileName.endsWith('.json')) {
