@@ -71,11 +71,19 @@ export class TemplateDiscovery {
 
         const content = await this.loadFile(templatePath);
 
-        // Verify content is valid (not a string from failed JSON parse)
-        if (typeof content === "string") {
+        // Text files are valid templates - they will be symlinked or copied, not parsed as objects
+        // Only skip if it's a JSON file that failed to parse (indicated by string content for JSON files)
+        const ext = path.extname(templatePath).toLowerCase();
+        const basename = path.basename(templatePath).toLowerCase();
+        const isJsonFile = [".json", ".jsonc", ".json5"].includes(ext) || basename.endsWith(".json") || basename.endsWith(".jsonc");
+        
+        // Allow all text files by default - only skip JSON files that returned text (failed to parse)
+        if (typeof content === "string" && isJsonFile) {
           console.warn(`⚠️  Skipping template ${templatePath}: content is text (likely invalid JSON after variable resolution)`);
           continue;
         }
+        
+        // All other text files (TypeScript, shell scripts, markdown, config files, etc.) are valid
 
         templates.push({
           type: "template",
@@ -168,6 +176,10 @@ export class TemplateDiscovery {
       } catch (error) {
         throw new Error(`Failed to parse TOML in ${filePath} after variable resolution: ${error instanceof Error ? error.message : String(error)}`);
       }
+    } else if (ext === ".npmrc" || filePath.endsWith(".npmrc")) {
+      // .npmrc files are text files (INI-like format), not JSON
+      // Return as text so they can be symlinked/copied
+      return content;
     } else {
       // For other files, return as text
       return content;
