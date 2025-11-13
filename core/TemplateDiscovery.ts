@@ -43,7 +43,7 @@ export class TemplateDiscovery {
     for (const templatePath of templatePaths) {
       try {
         const _relativePath = path.relative(templatesDir, templatePath);
-        
+
         // Resolve template variables in the relative path (filename) FIRST
         // This allows us to skip templates early if variables aren't available
         let resolvedRelativePath: string;
@@ -56,7 +56,26 @@ export class TemplateDiscovery {
         }
 
         // Only load content if filename resolution succeeded
+        // Check for unresolved variables in raw content before loading
+        const rawContent = await fs.readFile(templatePath, "utf-8");
+        if (TemplateVariableResolver.hasVariables(rawContent)) {
+          try {
+            // Try to resolve - if it fails, skip this template
+            TemplateVariableResolver.resolve(rawContent);
+          } catch (error) {
+            // Variables can't be resolved - skip template (override/fragment can provide values)
+            console.warn(`⚠️  Skipping template ${templatePath}: content has unresolved template variables (${error instanceof Error ? error.message : String(error)})`);
+            continue;
+          }
+        }
+
         const content = await this.loadFile(templatePath);
+
+        // Verify content is valid (not a string from failed JSON parse)
+        if (typeof content === "string") {
+          console.warn(`⚠️  Skipping template ${templatePath}: content is text (likely invalid JSON after variable resolution)`);
+          continue;
+        }
 
         templates.push({
           type: "template",
@@ -66,7 +85,9 @@ export class TemplateDiscovery {
           resolvedRelativePath, // Store resolved path for target path calculation
         });
       } catch (error) {
-        console.error(`❌ Failed to load template ${templatePath}:`, error);
+        // Template failed to load (invalid JSON, missing variables, etc.) - skip it
+        console.warn(`⚠️  Skipping template ${templatePath}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
       }
     }
 
@@ -93,7 +114,7 @@ export class TemplateDiscovery {
       const rawRelativePath = path.relative(templatesDir, templatePath);
       relativePath = TemplateVariableResolver.resolve(rawRelativePath);
     }
-    
+
     // Remove __ prefix from filename
     // Handle cases like: __{{ENV}}.yaml -> {{ENV}}.yaml (after resolution)
     // or: __file-{{NAME}}.yaml -> file-{{NAME}}.yaml (after resolution)
@@ -113,25 +134,27 @@ export class TemplateDiscovery {
     let content = await fs.readFile(filePath, "utf-8");
 
     // Resolve template variables in content
+    // Missing variables should throw - they must be set in mise.toml or environment
     if (TemplateVariableResolver.hasVariables(content)) {
-      try {
-        content = TemplateVariableResolver.resolve(content);
-      } catch (error) {
-        // If variables can't be resolved, log warning but continue
-        // This allows templates to be loaded even if some variables aren't set yet
-        console.warn(`⚠️  Warning: Could not resolve template variables in ${filePath}: ${error}`);
-      }
+      content = TemplateVariableResolver.resolve(content);
     }
 
-    if ([".json", ".jsonc", ".json5"].includes(ext)) {
-      // For JSON, parse it
-      // Note: This is basic JSON parsing. For .jsonc/.json5 support,
-      // we'd need additional libraries
+    if ([".json", ".jsonc", ".json5"].includes(ext) || filePath.endsWith(".code-workspace")) {
+      // For JSON/JSONC, parse it after variable resolution
+      // .code-workspace files are JSONC (allow trailing commas)
       try {
+        // Try strict JSON first
         return JSON.parse(content);
-      } catch {
-        // If parsing fails, return as text
-        return content;
+      } catch (error) {
+        // If strict JSON fails, try to parse as JSONC (remove trailing commas)
+        // This handles VS Code workspace files which allow trailing commas
+        try {
+          const cleaned = content.replace(/,(\s*[}\]])/g, "$1");
+          return JSON.parse(cleaned);
+        } catch (jsoncError) {
+          // If both fail, throw error (invalid template)
+          throw new Error(`Failed to parse JSON/JSONC in ${filePath} after variable resolution: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     } else if ([".yaml", ".yml"].includes(ext)) {
       // For YAML, we'll parse it using the yaml library
@@ -140,7 +163,11 @@ export class TemplateDiscovery {
     } else if (ext === ".toml") {
       // For TOML, parse it using @iarna/toml
       const TOML = await import("@iarna/toml");
-      return TOML.parse(content) as ConfigContent;
+      try {
+        return TOML.parse(content) as ConfigContent;
+      } catch (error) {
+        throw new Error(`Failed to parse TOML in ${filePath} after variable resolution: ${error instanceof Error ? error.message : String(error)}`);
+      }
     } else {
       // For other files, return as text
       return content;

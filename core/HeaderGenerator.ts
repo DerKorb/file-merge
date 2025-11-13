@@ -20,7 +20,8 @@ export class HeaderGenerator {
     );
 
     // Detect comment style based on extension
-    if ([".json", ".jsonc", ".json5"].includes(ext)) {
+    // .code-workspace files are JSON files
+    if ([".json", ".jsonc", ".json5", ".code-workspace"].includes(ext)) {
       return this.generateJsonHeader(relSources);
     } else if ([".yaml", ".yml"].includes(ext)) {
       return this.generateYamlHeader(relSources);

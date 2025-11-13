@@ -255,8 +255,9 @@ export class ConfigManager {
     // Write file
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
 
-    if ([".json", ".jsonc", ".json5"].includes(ext)) {
-      // For JSON, parse header and merge with content
+    // .code-workspace files are JSON files
+    if ([".json", ".jsonc", ".json5", ".code-workspace"].includes(ext)) {
+      // For JSON, merge header object with content
       const headerObj = JSON.parse(header);
       const combined = {
         ...(typeof headerObj === "object" && headerObj !== null
